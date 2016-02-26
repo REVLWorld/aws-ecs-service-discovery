@@ -6,6 +6,7 @@ setup(
     py_modules=['services'],
     install_requires=[
         'boto',
+        'boto3',
     ],
     entry_points='''
         [console_scripts]

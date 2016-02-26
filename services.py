@@ -18,10 +18,16 @@ import logging
 import os
 import re
 import boto
+import boto3
 
-ecs = boto.connect_ec2containerservice()
-ec2 = boto.connect_ec2()
+from boto import ec2
+
+ec2 = boto.ec2.connect_to_region("eu-west-1")
 route53 = boto.connect_route53()
+
+boto3.setup_default_session(region_name="eu-west-1")
+ecs3 = boto3.client('ecs')
+route533 = boto3.client("route53")
 
 logging.basicConfig(format='%(asctime)s %(message)s',
                     datefmt='%Y/%m/%d/ %I:%M:%S %p')
@@ -48,14 +54,9 @@ class MultipleTasksRunningForService(Exception):
 
 def get_task_definition_arns():
     """Request all API pages needed to get Task Definition ARNS."""
-    next_token = []
+    # next_token = []
     arns = []
-    while next_token is not None:
-        detail = ecs.list_task_definitions(next_token=next_token)
-        detail = detail['ListTaskDefinitionsResponse']
-        detail = detail['ListTaskDefinitionsResult']
-        arns.extend(detail['taskDefinitionArns'])
-        next_token = detail['nextToken']
+    arns = ecs3.list_task_definitions()["taskDefinitionArns"]
     return arns
 
 
@@ -73,8 +74,8 @@ def get_task_definition_families():
 
 def get_task_arn(family):
     """Get the ARN of running task, given the family name."""
-    response = ecs.list_tasks(cluster=cluster, family=family)
-    arns = response['ListTasksResponse']['ListTasksResult']['taskArns']
+    response = ecs3.list_tasks(cluster=cluster, family=family)
+    arns = response['taskArns']
     if len(arns) == 0:
         return None
     if len(arns) > 1:
@@ -84,17 +85,15 @@ def get_task_arn(family):
 
 def get_task_container_instance_arn(task_arn):
     """Get the ARN for the container instance a give task is running on."""
-    response = ecs.describe_tasks(task_arn, cluster=cluster)
-    response = response['DescribeTasksResponse']
-    return response['DescribeTasksResult']['tasks'][0]['containerInstanceArn']
+    response = ecs3.describe_tasks(tasks=[task_arn], cluster=cluster)
+    return response['tasks'][0]['containerInstanceArn']
 
 
 def get_container_instance_ec2_id(container_instance_arn):
     """Id the EC2 instance serving as the container instance."""
-    detail = ecs.describe_container_instances(
-        container_instances=container_instance_arn, cluster=cluster)
-    detail = detail['DescribeContainerInstancesResponse']
-    detail = detail['DescribeContainerInstancesResult']['containerInstances']
+    detail = ecs3.describe_container_instances(
+        containerInstances=[container_instance_arn], cluster=cluster)
+    detail = detail['containerInstances']
     return detail[0]['ec2InstanceId']
 
 
@@ -117,11 +116,13 @@ def get_zone_for_vpc(vpc_id):
     one VPC. (But, why would you expect internal DNS for 2 different private
     networks to be the same anyway?)
     """
-    response = route53.get_all_hosted_zones()['ListHostedZonesResponse']
+    response = route533.list_hosted_zones()
     for zone in response['HostedZones']:
         zone_id = zone['Id'].split('/')[-1]
-        detail = route53.get_hosted_zone(zone_id)['GetHostedZoneResponse']
-        if detail['VPCs']['VPC']['VPCId'] == vpc_id:
+        detail = route533.get_hosted_zone(Id=zone_id)
+        vpcs = detail.get("VPCs")
+        if vpcs is None: continue
+        if detail['VPCs'][0]['VPCId'] == vpc_id:
             return {'zone_id': zone_id, 'zone_name': zone['Name']}
 
 
